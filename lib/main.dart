@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/home_feed.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   runApp(const HyperlocalNewsApp());
 }
 
@@ -41,24 +47,100 @@ class MainNewsScreen extends StatefulWidget {
 class _MainNewsScreenState extends State<MainNewsScreen> {
   String? selectedCity;
   String selectedLanguage = "English";
-  
-  final List<String> availableCities = [
-    "Kundli",
-    "Sonipat",
-    "Delhi",
-    "Chandigarh",
-    "Mumbai",
-    "Bangalore"
-  ];
+  String pincode = "";
+  String stateName = "";
+  bool isDetecting = false;
+  bool isInitializing = true;
 
-  void _selectCity(String city) {
-    setState(() {
-      selectedCity = city;
-    });
+  @override
+  void initState() {
+    super.initState();
+    _checkSavedLocation();
+  }
+
+  Future<void> _checkSavedLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedCity = prefs.getString('saved_location');
+    final savedPincode = prefs.getString('saved_pincode') ?? "";
+    final savedState = prefs.getString('saved_state') ?? "";
+
+    if (savedCity != null && savedCity.isNotEmpty) {
+      setState(() {
+        selectedCity = savedCity;
+        pincode = savedPincode;
+        stateName = savedState;
+        isInitializing = false;
+      });
+    } else {
+      setState(() => isInitializing = false);
+      // Auto-trigger detection on first run
+      _autoDetectLocation();
+    }
+  }
+
+  Future<void> _autoDetectLocation() async {
+    setState(() => isDetecting = true);
+    
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+        Position position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.medium,
+          )
+        );
+        
+        List<Placemark> placemarks = await placemarkFromCoordinates(
+          position.latitude, position.longitude
+        );
+
+        if (placemarks.isNotEmpty) {
+          Placemark place = placemarks.first;
+          
+          setState(() {
+            pincode = place.postalCode ?? "";
+            stateName = place.administrativeArea ?? "";
+            
+            String subLocality = place.subLocality ?? "";
+            String locality = place.locality ?? "";
+            String city = place.subAdministrativeArea ?? "";
+            String state = place.administrativeArea ?? "";
+            String country = place.country ?? "";
+
+            List<String> components = [];
+            if (subLocality.isNotEmpty) components.add(subLocality);
+            if (locality.isNotEmpty) components.add(locality);
+            if (city.isNotEmpty && city != locality) components.add(city);
+            if (state.isNotEmpty) components.add(state);
+            if (country.isNotEmpty) components.add(country);
+
+            selectedCity = components.join(", ");
+          });
+
+          // Save to local storage
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('saved_location', selectedCity!);
+          await prefs.setString('saved_pincode', pincode);
+          await prefs.setString('saved_state', stateName);
+        }
+      }
+    } catch (e) {
+      debugPrint("Location error: $e");
+    } finally {
+      setState(() => isDetecting = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (isInitializing) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     if (selectedCity == null) {
       return _buildWelcomeScreen();
     }
@@ -82,23 +164,29 @@ class _MainNewsScreenState extends State<MainNewsScreen> {
                 ),
               ),
               const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '$selectedCity News',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  Row(
-                    children: [
-                      Text(
-                        selectedCity!,
-                        style: TextStyle(fontSize: 11, color: Colors.blue.shade700),
-                      ),
-                      Icon(Icons.arrow_drop_down, size: 14, color: Colors.blue.shade700),
-                    ],
-                  ),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Area News',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            selectedCity!,
+                            style: TextStyle(fontSize: 11, color: Colors.blue.shade700),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Icon(Icons.arrow_drop_down, size: 14, color: Colors.blue.shade700),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -124,10 +212,14 @@ class _MainNewsScreenState extends State<MainNewsScreen> {
         ],
       ),
       endDrawer: _buildNotificationDrawer(),
-      // Added SafeArea here to prevent bottom overflow/behind buttons
-      body: const SafeArea(
-        top: false, // AppBar handles the top
-        child: HomeFeedScreen(),
+      body: SafeArea(
+        top: false,
+        child: HomeFeedScreen(
+          area: selectedCity!, 
+          language: selectedLanguage,
+          pincode: pincode,
+          state: stateName,
+        ),
       ),
     );
   }
@@ -139,8 +231,8 @@ class _MainNewsScreenState extends State<MainNewsScreen> {
           padding: const EdgeInsets.all(24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisAlignment: MainAxisAlignment.center, // Center the logo and button
             children: [
-              const SizedBox(height: 60),
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -164,43 +256,27 @@ class _MainNewsScreenState extends State<MainNewsScreen> {
                 style: TextStyle(color: Colors.grey, fontSize: 16),
               ),
               const SizedBox(height: 48),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Select your city to get started',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                decoration: InputDecoration(
-                  hintText: 'Search for your city...',
-                  prefixIcon: const Icon(Icons.search),
-                  filled: true,
-                  fillColor: Colors.grey.shade100,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
+              
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: isDetecting ? null : _autoDetectLocation,
+                  icon: isDetecting 
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.my_location),
+                  label: Text(isDetecting ? 'Detecting...' : 'Get Started with Location'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: availableCities.length,
-                  itemBuilder: (context, index) {
-                    return Card(
-                      elevation: 0,
-                      color: Colors.grey.shade50,
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        title: Text(availableCities[index]),
-                        trailing: const Icon(Icons.chevron_right, size: 20),
-                        onTap: () => _selectCity(availableCities[index]),
-                      ),
-                    );
-                  },
-                ),
+              const Text(
+                'We use your location to show news and shops near you.',
+                style: TextStyle(color: Colors.grey, fontSize: 12),
               ),
             ],
           ),
@@ -215,36 +291,22 @@ class _MainNewsScreenState extends State<MainNewsScreen> {
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (context) {
-        return SafeArea( // Added SafeArea inside BottomSheet
+        return SafeArea(
           child: Container(
             padding: const EdgeInsets.all(16),
-            height: MediaQuery.of(context).size.height * 0.7,
+            height: 200, // Reduced height as search is gone
             child: Column(
               children: [
-                const Text('Change City', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 16),
-                TextField(
-                  decoration: InputDecoration(
-                    hintText: 'Search city...',
-                    prefixIcon: const Icon(Icons.search),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: availableCities.length,
-                    itemBuilder: (context, index) {
-                      return ListTile(
-                        title: Text(availableCities[index]),
-                        selected: selectedCity == availableCities[index],
-                        onTap: () {
-                          _selectCity(availableCities[index]);
-                          Navigator.pop(context);
-                        },
-                      );
-                    },
-                  ),
+                const Text('Location Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 24),
+                ListTile(
+                  leading: const Icon(Icons.my_location, color: Colors.blue),
+                  title: const Text('Update Current Location'),
+                  subtitle: const Text('Refresh using GPS'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _autoDetectLocation();
+                  },
                 ),
               ],
             ),
