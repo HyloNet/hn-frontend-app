@@ -11,7 +11,10 @@ import '../models/auth_models.dart';
 import '../models/health_models.dart';
 
 class ApiService {
+  final http.Client _client;
   String get _baseUrl => AppConfig.baseUrl;
+
+  ApiService({http.Client? client}) : _client = client ?? http.Client();
 
   Future<Resource<T>> _handleResponse<T>(
     http.Response response,
@@ -45,7 +48,7 @@ class ApiService {
 
   Future<Resource<ApiHealth>> healthCheck() async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/health')).timeout(
+      final response = await _client.get(Uri.parse('$_baseUrl/health')).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleResponse(response, ApiHealth.fromJson);
@@ -56,7 +59,7 @@ class ApiService {
 
   Future<Resource<GeminiTestResponse>> testGemini() async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/test-gemini')).timeout(
+      final response = await _client.get(Uri.parse('$_baseUrl/test-gemini')).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleResponse(response, GeminiTestResponse.fromJson);
@@ -70,7 +73,7 @@ class ApiService {
       final uri = Uri.parse('$_baseUrl/news').replace(queryParameters: {
         if (location != null && location.isNotEmpty) 'location': location,
       });
-      final response = await http.get(uri).timeout(
+      final response = await _client.get(uri).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleListResponse(response, ArticleOut.fromJson);
@@ -94,7 +97,7 @@ class ApiService {
         'limit': limit.toString(),
         if (lang != null && lang.isNotEmpty) 'lang': lang,
       });
-      final response = await http.get(uri).timeout(
+      final response = await _client.get(uri).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleListResponse(response, NewsOut.fromJson);
@@ -118,7 +121,7 @@ class ApiService {
         'limit': limit.toString(),
         if (lang != null && lang.isNotEmpty) 'lang': lang,
       });
-      final response = await http.get(uri).timeout(
+      final response = await _client.get(uri).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       if (response.statusCode == 200) {
@@ -136,7 +139,7 @@ class ApiService {
       final uri = Uri.parse('$_baseUrl/ads').replace(queryParameters: {
         if (area != null && area.isNotEmpty) 'area': area,
       });
-      final response = await http.get(uri).timeout(
+      final response = await _client.get(uri).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleListResponse(response, Ad.fromJson);
@@ -150,7 +153,7 @@ class ApiService {
       final uri = Uri.parse('$_baseUrl/ads').replace(queryParameters: {
         if (area != null && area.isNotEmpty) 'area': area,
       });
-      final response = await http.get(uri).timeout(
+      final response = await _client.get(uri).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       if (response.statusCode == 200) {
@@ -165,7 +168,7 @@ class ApiService {
 
   Future<Resource<Ad>> getAdById(String adId) async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/ads/$adId')).timeout(
+      final response = await _client.get(Uri.parse('$_baseUrl/ads/$adId')).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleResponse(response, Ad.fromJson);
@@ -176,7 +179,7 @@ class ApiService {
 
   Future<Resource<List<LocationOut>>> getLocations() async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/locations')).timeout(
+      final response = await _client.get(Uri.parse('$_baseUrl/locations')).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleListResponse(response, LocationOut.fromJson);
@@ -187,7 +190,7 @@ class ApiService {
 
   Future<Resource<LocationOut>> createLocation(LocationCreate location) async {
     try {
-      final response = await http.post(
+      final response = await _client.post(
         Uri.parse('$_baseUrl/locations'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(location.toJson()),
@@ -202,7 +205,7 @@ class ApiService {
 
   Future<Resource<LocationOut>> getLocationBySlug(String slug) async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/locations/$slug')).timeout(
+      final response = await _client.get(Uri.parse('$_baseUrl/locations/$slug')).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
       return _handleResponse(response, LocationOut.fromJson);
@@ -213,14 +216,26 @@ class ApiService {
 
   Future<Resource<UserOut>> register(UserRegister user) async {
     try {
-      final response = await http.post(
+      final response = await _client.post(
         Uri.parse('$_baseUrl/auth/register'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(user.toJson()),
       ).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
-      return _handleResponse(response, UserOut.fromJson);
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        try {
+          final data = json.decode(response.body);
+          final userWrapper = data['user'] as Map<String, dynamic>?;
+          if (userWrapper != null) {
+            return Success(UserOut.fromJson(userWrapper));
+          }
+          return Error('Invalid response format: missing user object');
+        } catch (e) {
+          return Error('Failed to parse register response: $e');
+        }
+      }
+      return Error('Registration failed with status ${response.statusCode}: ${response.body}');
     } catch (e) {
       return Error('Registration failed: $e');
     }
@@ -228,14 +243,26 @@ class ApiService {
 
   Future<Resource<UserOut>> login(UserLogin credentials) async {
     try {
-      final response = await http.post(
+      final response = await _client.post(
         Uri.parse('$_baseUrl/auth/login'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(credentials.toJson()),
       ).timeout(
         Duration(seconds: AppConfig.apiTimeout),
       );
-      return _handleResponse(response, UserOut.fromJson);
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        try {
+          final data = json.decode(response.body);
+          final userWrapper = data['user'] as Map<String, dynamic>?;
+          if (userWrapper != null) {
+            return Success(UserOut.fromJson(userWrapper));
+          }
+          return Error('Invalid response format: missing user object');
+        } catch (e) {
+          return Error('Failed to parse login response: $e');
+        }
+      }
+      return Error('Login failed with status ${response.statusCode}: ${response.body}');
     } catch (e) {
       return Error('Login failed: $e');
     }

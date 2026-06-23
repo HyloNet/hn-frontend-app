@@ -24,3 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Removed hardcoded local IP address from UI layer
+- Fixed auth endpoint response parsing for `login` and `register` to unwrap backend `{"user": ...}` wrapper
+- Added fallback values in `AppConfig` for test environments where `.env` is not loaded
+- Fixed default Flutter starter widget test and added unit test coverage for all 11 API endpoints
